@@ -2,6 +2,7 @@
 using RedisSessionProvider.Config;
 using StackExchange.Redis;
 using System.Web;
+using System.Configuration;
 
 namespace RedisSessionProviderUnitTests.Integration
 {
@@ -13,8 +14,10 @@ namespace RedisSessionProviderUnitTests.Integration
     [TestFixture]
     public class ExpirationTests
     {
-        private static string REDIS_SERVER = "192.168.0.12:6379";
-        private static int REDIS_DB = 13;
+        private static string REDIS_SERVER = ConfigurationManager.AppSettings["REDIS_SERVER"];
+        private static int REDIS_INDEX = int.Parse(ConfigurationManager.AppSettings["REDIS_INDEX"]);
+		private static string REDIS_PORT = ConfigurationManager.AppSettings["REDIS_PORT"];
+	    private static string REDIS_CONFIG = string.Format("{0}:{1}", REDIS_SERVER, REDIS_PORT);
         private static TimeSpan TIMEOUT = new TimeSpan(1, 0, 0);
         private static string SESSION_ID = "SESSION_ID";
 
@@ -25,14 +28,14 @@ namespace RedisSessionProviderUnitTests.Integration
         [SetUp]
         public void OnBeforeTestExecute()
         {
-            _redisConfigOpts = ConfigurationOptions.Parse(REDIS_SERVER);
+            _redisConfigOpts = ConfigurationOptions.Parse(REDIS_CONFIG);
             RedisConnectionConfig.GetSERedisServerConfigDbIndex = @base => new Tuple<string, int, ConfigurationOptions>(
-                "SessionConnection", REDIS_DB, _redisConfigOpts);
+                "SessionConnection", REDIS_INDEX, _redisConfigOpts);
             RedisSessionConfig.SessionTimeout = TIMEOUT;
 
             // StackExchange Redis client
-            ConnectionMultiplexer redis = ConnectionMultiplexer.Connect(REDIS_SERVER);
-            db = redis.GetDatabase(REDIS_DB);
+            ConnectionMultiplexer redis = ConnectionMultiplexer.Connect(REDIS_CONFIG);
+            db = redis.GetDatabase(REDIS_INDEX);
         }
 
         [Test]
