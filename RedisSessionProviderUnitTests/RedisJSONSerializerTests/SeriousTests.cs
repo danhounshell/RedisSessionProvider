@@ -29,8 +29,9 @@
             // basic test of a string
             string testString = "foo bar baz";
             string testSerialized = this.srsly.SerializeOne("testKey", testString);
+	        string testDeserialzed = (string) this.srsly.DeserializeOne(testSerialized);
 
-            Assert.AreEqual(testString, (string)this.srsly.DeserializeOne(testSerialized));
+            Assert.AreEqual(testString, testDeserialzed);
 
 
 

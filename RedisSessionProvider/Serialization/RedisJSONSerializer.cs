@@ -1,18 +1,17 @@
-﻿namespace RedisSessionProvider.Serialization
+﻿using System.Dynamic;
+using System.Text.RegularExpressions;
+using RedisSessionProvider.Config;
+
+namespace RedisSessionProvider.Serialization
 {
     using System;
     using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Data;
     using System.IO;
-    using System.Linq;
     using System.Text;
-    using System.Text.RegularExpressions;
-    using System.Web;
-    using System.Web.SessionState;
 
     using Newtonsoft.Json;
-    using RedisSessionProvider.Config;
     using StackExchange.Redis;
 
     /// <summary>
@@ -29,14 +28,11 @@
         private static ConcurrentDictionary<string, Type> TypeCache = 
             new ConcurrentDictionary<string, Type>();
 
-        /// <summary>
-        /// Format string used to write type information into the Redis entry before the JSON data
-        /// </summary>
-        protected string typeInfoPattern = "|!a_{0}_a!|";
-        /// <summary>
-        /// Regular expression used to extract type information from Redis entry
-        /// </summary>
-        protected Regex typeInfoReg = new Regex(@"\|\!a_(.*)_a\!\|", RegexOptions.Compiled);
+		/// <summary>
+		/// Regular expression used to extract type information from Redis entry
+		/// </summary>
+		protected Regex typeInfoReg = new Regex(@"{\s*\""DataValue\""\s*:\s*(.*)\s*,\s*\""DataType\""\s*:\s*(.*)\s*}", RegexOptions.Compiled);
+		protected Regex typeInfoRegReverse = new Regex(@"{\s*\""DataType\""\s*:\s*(.*)\s*,\s*\""DataValue\""\s*:\s*(.*)\s*}", RegexOptions.Compiled);
 
         /// <summary>
         /// Internal dictionaries for type info for commonly used types, which allows for slightly shorter
@@ -140,79 +136,93 @@
         /// <returns>The original object</returns>
         public virtual object DeserializeOne(string objRaw)
         {
-            Match fieldTypeMatch = this.typeInfoReg.Match(objRaw);
+			if (string.IsNullOrEmpty(objRaw))
+			{
+				return null;
+			}
 
-            if (fieldTypeMatch.Success)
-            {
-                // if we are deserializing a datatable, use this
-                if (fieldTypeMatch.Groups[1].Value == DataTableTypeSerialized)
-                {
-                    DataSet desDtWrapper = new DataSet();
-                    using (StringReader rdr = new StringReader(objRaw.Substring(fieldTypeMatch.Length)))
-                    {
-                        desDtWrapper.ReadXml(rdr);
-                    }
-                    return desDtWrapper.Tables[0];
+			//var redisData = JsonConvert.DeserializeObject<RedisData>(objRaw);
+			//if (redisData == null || string.IsNullOrEmpty(redisData.Type) || string.IsNullOrEmpty(redisData.Data))
+			//{
+			//	return null;
+			//}
 
-                }
-                // or if we are doing a dataset
-                else if (fieldTypeMatch.Groups[1].Value == DataSetTypeSerialized)
-                {
-                    DataSet dsOut = new DataSet();
-                    using (StringReader rdr = new StringReader(objRaw.Substring(fieldTypeMatch.Length)))
-                    {
-                        dsOut.ReadXml(rdr);
-                    }
-                    return dsOut;
-                }
-                // or for most things that are sane, use this
-                else
-                {
-                    string typeInfoString = fieldTypeMatch.Groups[1].Value;
-                    Type typeData;
+			Match fieldTypeMatch = this.typeInfoReg.Match(objRaw);
+	        Match fieldTypeMatchReverse = this.typeInfoRegReverse.Match(objRaw);
 
-                    if (this.TypeInfoShortcutsDsrlz.ContainsKey(typeInfoString))
-                    {
-                        typeData = this.TypeInfoShortcutsDsrlz[typeInfoString];
-                    }
-                    else if(RedisJSONSerializer.TypeCache.TryGetValue(typeInfoString, out typeData))
-                    {
-                        // great, we have it in cache
-                    }
-                    else
-                    {
-                        typeData = JsonConvert.DeserializeObject<Type>(typeInfoString);
+	        var typeString = "";
+	        var valueString = "";
 
-                        #region tryCacheTypeInfo
-                        try
-                        {
-                            // we should cache it for future use
-                            TypeCache.AddOrUpdate(
-                                typeInfoString,
-                                typeData,
-                                (str, existing) => typeData); // replace with our type data if already exists
-                        }
-                        catch(Exception cacheExc)
-                        {
-                            RedisSerializationConfig.SerializerExceptionLoggingDel(
-                                new TypeCacheException(
-                                    string.Format(
-                                        "Unable to cache type info for raw value '{0}' during deserialization",
-                                        objRaw), 
-                                    cacheExc));
-                        }
-                        #endregion
-                    }
+			if (fieldTypeMatch.Success)
+			{
+				valueString = fieldTypeMatch.Groups[1].Value;
+				typeString = JsonConvert.DeserializeObject<string>(fieldTypeMatch.Groups[2].Value);
+			} else if (fieldTypeMatchReverse.Success)
+			{
+				valueString = fieldTypeMatchReverse.Groups[2].Value;
+				typeString = JsonConvert.DeserializeObject<string>(fieldTypeMatchReverse.Groups[1].Value);
+			}
+			else
+			{
+				return null;
+			}
+			
+			// if we are deserializing a datatable, use this
+			if (typeString == DataTableTypeSerialized) {
+				DataSet desDtWrapper = new DataSet();					
+				using (StringReader rdr = new StringReader(valueString)) {
+					desDtWrapper.ReadXml(rdr);
+				}
+				return desDtWrapper.Tables[0];
+			}
+			// or if we are doing a dataset
+			if (typeString == DataSetTypeSerialized)
+			{
+				DataSet dsOut = new DataSet();
+				using (StringReader rdr = new StringReader(valueString))
+				{
+					dsOut.ReadXml(rdr);
+				}
+				return dsOut;
+			}
+			// else for most things that are sane, use this
+			Type typeData;
+			if (this.TypeInfoShortcutsDsrlz.ContainsKey(typeString))
+			{
+				typeData = this.TypeInfoShortcutsDsrlz[typeString];
+			}
+			else if (TypeCache.TryGetValue(typeString, out typeData))
+			{
+				// great, we have it in cache
+			}
+			else
+			{
+				typeData = JsonConvert.DeserializeObject<Type>(typeString);
 
-                    return JsonConvert.DeserializeObject(
-                        objRaw.Substring(fieldTypeMatch.Length),
-                        typeData);
-                }
-            }
-            else
-            {
-                return null;
-            }
+				#region tryCacheTypeInfo
+
+				try
+				{
+					// we should cache it for future use
+					TypeCache.AddOrUpdate(
+						typeString,
+						typeData,
+						(str, existing) => typeData); // replace with our type data if already exists
+				}
+				catch (Exception cacheExc)
+				{
+					RedisSerializationConfig.SerializerExceptionLoggingDel(
+						new TypeCacheException(
+							string.Format(
+								"Unable to cache type info for raw value '{0}' during deserialization",
+								valueString),
+							cacheExc));
+				}
+
+				#endregion
+			}
+
+			return JsonConvert.DeserializeObject(valueString, typeData);           
         }
 
         /// <summary>
@@ -275,7 +285,10 @@
                     dtToStore.WriteXml(xmlSw, XmlWriteMode.WriteSchema);
                 }
 
-                return string.Format(typeInfoPattern, DataTableTypeSerialized) + xmlSer.ToString();
+				dynamic redisData = new ExpandoObject();
+				redisData.DataValue = xmlSer.ToString();
+				redisData.DataType = DataTableTypeSerialized;
+				return JsonConvert.SerializeObject(redisData);
             }
             // the same is true of DataSet as DataTable
             else if (origObj is DataSet)
@@ -287,7 +300,10 @@
                     dsToStore.WriteXml(xmlSw, XmlWriteMode.WriteSchema);
                 }
 
-                return string.Format(typeInfoPattern, DataSetTypeSerialized) + xmlSer.ToString();
+				dynamic redisData = new ExpandoObject();
+				redisData.DataValue = xmlSer.ToString();
+				redisData.DataType = DataSetTypeSerialized;
+				return JsonConvert.SerializeObject(redisData);
             }
             else
             {
@@ -302,10 +318,11 @@
                 {
                     typeInfo = JsonConvert.SerializeObject(objType);
                 }
-                
-                string objInfo = JsonConvert.SerializeObject(origObj);
 
-                return string.Format(this.typeInfoPattern, typeInfo) + objInfo;
+	            dynamic redisData = new ExpandoObject();
+	            redisData.DataValue = origObj;
+				redisData.DataType = typeInfo;
+				return JsonConvert.SerializeObject(redisData);
             }
         }
 
